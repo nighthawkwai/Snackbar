@@ -1,0 +1,641 @@
+<html>
+	<head>
+		<title>
+			Snackbar
+		</title>
+		<script src="http://ajax.googleapis.com/ajax/libs/jquery/1.11.2/jquery.min.js"></script>
+		<script src="https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.2/jquery-ui.min.js"></script>
+    	<script src="http://www.youtube.com/player_api"></script>
+		<script>
+			// Create youtube player
+	        var players = [];
+
+	        // Create youtube player
+	        var playersReady = [];
+
+	        // Array of integers. Each integer represents an index in a list of players
+	        var playlist = [];
+
+	        // Keep track of what video is playing
+	        var playlistIndex = 0;
+
+	        // False if the player won't play initially or it already played on start.
+	        var justLoaded = true;
+
+	        // Used for bringing things to the front of the screen
+	        var maxZindex = 1;
+
+	        // If something is trying to start their video, ignore it if another video is getting ready
+	        var lockPlay = false;
+
+	        // Called from onload in the body
+	        function init(){
+	        	// [Supposedly] blocks redirects when a URL is dropped onto the page
+	        	document.body.addEventListener('drop', function(e) {
+				    e.preventDefault();
+				}, false);
+
+	        	// Load videos from URL
+	        	if (window.location.href.indexOf('#') != -1){
+					var ids = window.location.href.split('#')[1].split('&');
+					for (var i = 0; i < ids.length; i++){
+						addToPlaylist(ids[i]);
+					}
+				}
+
+				// Make the buttons do things
+				$("#pause").mousedown(
+					function(){
+						pause();
+			        }
+			    );
+			    $("#prev").mousedown(
+					function(){
+						players[playlistIndex].stopVideo();
+						playPrev();
+			        }
+			    );
+			    $("#next").mousedown(
+					function(){
+						players[playlistIndex].stopVideo();
+						playNext();
+			        }
+			    );
+			    $("#jump").mousedown(
+					function(){
+						scrollToPlaying();
+			        }
+			    );
+			    $("#clear").mousedown(
+					function(){
+						clearPlaylist();
+			        }
+			    );
+				// $("#lock").mousedown(
+				// 	function(){
+				// 		fixFrames();
+				// 	}
+				// );
+	        }
+
+	        // Play if it is the initial video
+	        function onPlayerReady(event) {
+				playersReady[players.indexOf(event.target)] = true;
+				if (playersReady[0] && justLoaded){
+		        	if (playlist.length == 0){
+		        		return;
+		        	}
+					playVideo(0);	
+					justLoaded = false;
+				}
+	        }
+
+	        // When video ends, play the next one.
+	        function onPlayerStateChange(event) {   
+	        	// Video ended     
+	            if (event.data == 0 && players.indexOf(event.target) == playlist[playlistIndex]) {
+	            	playNext();
+	            }
+
+	            if (event.data == 1){
+	            	var unpausedplaylistIndex = players.indexOf(event.target);
+	            	if (unpausedplaylistIndex != -1){
+	            		if (unpausedplaylistIndex != playlistIndex){
+	            			players[playlistIndex].pauseVideo();
+	            			playVideo(unpausedplaylistIndex);
+	            		}
+	            	}
+	            }
+
+				updatePauseButton();
+	        }
+
+	        // Play the next video if an error occurred
+	        function onPlayerError(event) {
+				playersReady[players.indexOf(event.target)] = false;
+				playNext();
+	        }
+
+	        // Plays the next video in queue
+	        function playNext(){
+            	playlistIndex = (playlistIndex+1)%playlist.length;
+	        	playVideo(playlistIndex);
+	        }
+
+	        // Plays the previous video in queue
+	        function playPrev(){
+            	playlistIndex = (playlistIndex-1+playlist.length)%playlist.length;
+	        	playVideo(playlistIndex);
+	        }
+
+	        // Puts a video at the top of the playlist, given a player id
+	        function playVideo(id){
+	        	// Prevent other videos from playing at the same time.
+	        	if (lockPlay){
+	        		return;
+	        	}
+	        	lockPlay = true;
+
+	        	playlistIndex = id;
+
+	        	$(".frameHighlighted").switchClass("frameHighlighted","frame");
+	        	$("#frame"+playlist[playlistIndex]).switchClass("frame", "frameHighlighted");
+
+	        	// Check if the video is broken
+	        	if (!playersReady[playlist[playlistIndex]]){
+	        		lockPlay = false;
+	        		playNext();
+	        		return;
+	        	}
+
+	            players[playlist[playlistIndex]].playVideo();
+	        	lockPlay = false;
+	        }
+
+			// Pauses or unpauses what is currently playing
+			function pause(){
+				var player = players[playlist[playlistIndex]];
+				if (player.getPlayerState() != 1){
+					player.playVideo();
+				}
+				else {
+					player.pauseVideo();
+				}
+			}
+
+	        // Don't redirect when URL is dropped
+			function allowDrop(event) {
+			    event.preventDefault();
+			}
+
+			// Add to playlist and URL
+			function dropped(event){
+				var data = event.dataTransfer.getData("Text");
+
+				// If there are multiple URL's given, do each of them.
+				var links = data.split('\n');
+				for (var i = 0; i < links.length; i++){
+					processLink(links[i]);
+				}
+			}
+
+			// Does things with the link, depending on what the link is from
+			function processLink(URL){
+				if (!/\S/.test(URL)) {
+					// URL is whitespace
+					return;
+				}
+				else if (getLinkType(URL) == "youtube"){
+					// For Youtube links
+					var id = idFromURL(URL);
+					addToPlaylist(id);
+					// Can't call update URL, since the new player might not be ready
+					window.location.href = addToURL(window.location.href, id);
+				}
+				else if (getLinkType(URL) == "reddit") {
+					// For reddit links
+					var newURL;
+					
+					// Add the .json?jsonp=?
+					if (URL.indexOf("?") == -1){
+						newURL = URL + "/.json?jsonp=?";
+					}
+					else {
+						// Insert the .json
+						newURL = URL.split("?").join(".json?jsonp=?&");
+					}
+
+					// Add the https://
+					if (URL.indexOf("//") == -1){
+						newURL = "https://" + newURL;
+					}
+
+					// Process all the Youtube links
+					$.getJSON(newURL, function(data) {
+					    $.each(data.data.children, function(i,item){
+					        if (getLinkType(item.data.url) == "youtube"){
+								processLink(item.data.url);
+					        }
+					    });
+					});
+				}
+				else {
+					// If nothing matches, it might be a keyword, so query Youtube and get the best matching video
+					$.ajax({
+						type: "GET",
+						url: 'http://gdata.youtube.com/feeds/api/videos?q='+URL+'&max-results=1&v=2&alt=jsonc',
+						dataType: "jsonp",
+						success: function(response){
+							if(response.data.items){
+								// There should only be one response, but just in case, iterate
+								$.each(response.data.items,	function(i,data){
+									// Assumes that this is still a valid URL for videos
+									processLink("https://www.youtube.com/watch?v=" + data.id);
+								});
+							}	
+						}
+					});
+				}
+			}
+
+			// Gets the type of website from the link
+			// Not exactly secure, as there could be a sketchyyoutube.com domain to be processed, but...
+			// That would be the fault of the user, wouldn't it?
+			function getLinkType(URL){
+				// Removes the first '/' characters before the domain name, then gets the domain, which is before the first '/'
+				// Note that the string might still  contain http or https
+				var domain = URL.replace("//","").split("/")[0];
+				if (domain.indexOf("youtube.com") != -1 || domain.indexOf("youtu.be") != -1){
+					return "youtube";
+				}
+				else if (domain.indexOf("reddit.com") != -1 || domain.indexOf("redd.it") != -1){
+					return "reddit";
+				}
+				return "unknown";
+			}
+
+			// Puts the video on the page, given the youtube id
+			function addToPlaylist(id){
+				var numPlayers = players.length;
+				var playerElemID = "player" + numPlayers;
+				var frameElemID = "frame" + numPlayers;
+				var indexElemID = "index" + numPlayers;
+				var dragMeElemID = "dragme" + numPlayers;
+				var panelElemID = "panel" + numPlayers;
+
+				$('#playlist').append(
+					"<div class='frame' id='" + frameElemID + "'>"
+					+ "<p class='index' id='" + indexElemID + "'>" + (playlist.length+1) + "</p>"
+					+ "<p class='dragme' id='" + dragMeElemID + "'>DRAG ME</p>"
+					+ "<p class='panel' id='" + panelElemID + "'></p>"
+					+ "<div class='player' id='" + playerElemID + "'></div>"
+					+ "</div>"
+				);
+
+				playlist[playlist.length] = numPlayers;
+				playersReady[numPlayers] = false;
+				players[numPlayers] = new YT.Player(playerElemID, {
+	              height: '200',
+	              width: '200',
+	              videoId: id,
+	              events: {
+	                'onReady': onPlayerReady,
+	                'onStateChange': onPlayerStateChange,
+	                'onError' : onPlayerError
+	              }
+	            });
+				
+				var frame = $( "#" + frameElemID );
+				frame.draggable({
+			      drag: function() {
+			      	reorderFrames();
+
+			      	// If out of bounds, warn that the frame might be removed
+			      	var playlistElem = $("#playlist");
+			      	if ($(frame).offset().left > playlistElem.offset().left + playlistElem.width()){
+			      		$("#"+dragMeElemID).text("REMOVE?");
+			      	}
+			      	else {
+			      		$("#"+dragMeElemID).text("DRAG ME");
+			      	}
+			      	
+			      	// Bring the panel to the front to make dragging smoother
+					bringToFront("#"+panelElemID);
+					$("#"+panelElemID).css({width:"500",height:"400"});
+			      },
+			      stop: function() {
+			      	// If out of bounds, remove the frame
+			      	var playlistElem = $("#playlist");
+			      	if ($(frame).offset().left > playlistElem.offset().left + playlistElem.width()){
+			      		removeFrame(numPlayers);
+			      	}
+
+			      	// Being the panel back to allow the user to click things
+					bringToBack("#"+panelElemID);
+					$("#"+panelElemID).css({width:"0",height:"0"});
+			      }
+			    });
+				frame.mousedown(
+					function(){
+						bringToFront("#"+frameElemID);
+			        }
+			    );
+			}
+
+			// Appends video id to URL, given the youtube id
+			function addToURL(URL, id){
+				if (URL.indexOf('#') == -1){
+	            	URL += '#' + id;
+	            }
+	            else{
+	            	URL += '&' + id;
+	            }
+	            return URL;
+			}
+
+			// Updates the URL to the current playlist
+			function updateURL(){
+				var URL = window.location.href;
+				var URL = URL.split('#')[0]; // Lop off the endings
+				for (var i = 0; i < playlist.length; i++){
+					var id = players[playlist[i]].getVideoUrl();
+					URL = addToURL(URL, idFromURL(id));
+				}
+				window.location.href = URL;
+			}
+
+			// Returns the extracted video id from a youtube URL
+			function idFromURL(URL){
+				var prefixRemoved;
+				if (URL.indexOf("v=") != -1){
+					prefixRemoved = URL.split("v=")[1];
+				}
+				else if (URL.indexOf("/v/") != -1) {
+					// Some odd links have a /v/ in it
+					prefixRemoved = URL.split("/v/")[1];
+				} 
+				else {
+					// The Youtube URL is a youtu.be URL
+					prefixRemoved = URL.replace("//","").split("/")[1];
+				}
+				var suffixRemoved = prefixRemoved.split("&")[0];
+				suffixRemoved = suffixRemoved.split("#")[0];
+				suffixRemoved = suffixRemoved.split("?")[0];
+				return suffixRemoved;
+			}
+
+			// Generates a Youtube id from a query, given some keywords
+			function idFromKeyword(keywords){
+				var id = "";
+
+				// Only get the top result, which is the one with most views
+				var ajax = $.ajax({
+					type: "GET",
+					url: 'http://gdata.youtube.com/feeds/api/videos?q='+keywords+'&orderby=viewCount&max-results=1&v=2&alt=jsonc',
+					dataType: "jsonp",
+					success: function(response){
+						if(response.data.items){
+							id = response.data.items[0].id;
+							// $.each(response.data.items,	function(i,data){
+							// 	id = data.id;
+							// });
+						}	
+					},
+					async: false
+				});
+
+				return ajax.responseText;
+			}
+
+			// Makes the element appear on top, given the frame id
+			function bringToFront(id){
+				$( id ).css("z-index",""+maxZindex);
+				maxZindex++;
+			}
+
+			// Makes the element appear on the bottom, given the frame id
+			function bringToBack(id){
+				$( id ).css("z-index","-"+maxZindex);
+				maxZindex++;
+			}
+
+			// Reorders all the frames according to graphical order
+			function reorderFrames(){
+				var currentlyPlayingID = playlist[playlistIndex];
+				var orderSave = playlist.slice();
+				playlist.sort(
+					function(i, j) {
+				        var i_y = $("#frame"+i).offset().top;
+				        var j_y = $("#frame"+j).offset().top;
+				        return (i_y < j_y) ? -1 : 1;
+		    		}
+			    );
+			    playlistIndex = playlist.indexOf(currentlyPlayingID);
+			    updateURL();
+
+			    // Reorder the numbers in the frames if it's not in order or it has a gap
+			    // if (!(orderSave.join()===playlist.join())){
+		    	for (var i = 0; i < playlist.length; i++){
+		    		$("#index"+playlist[i]).text(""+(i+1));
+		    	}
+			    // }
+			}
+
+			// Removes videos from visibility and the playlist, given the frame id.
+			function removeFrame(id){
+				var indexInPlaylist = playlist.indexOf(id);
+				if (indexInPlaylist == -1){
+					return;
+				}
+
+				// If it's currently playing, stop it and play the next song.
+				if (id == playlist[playlistIndex] && players[id].getPlayerState() == 1){
+					players[id].stopVideo();
+					playNext();
+				}
+
+				// Remove it from the playing order
+				playlist.splice(indexInPlaylist, 1);
+				if (playlistIndex >= indexInPlaylist){
+					playlistIndex--;
+				}
+
+				// Remove it from the page
+				$("#frame"+id).remove();
+
+				// Reorders the text and playlist
+				reorderFrames();
+			}
+
+			// Updates the text in the pause button
+			function updatePauseButton(){
+				var player = players[playlist[playlistIndex]];
+				if (player.getPlayerState() == 1){
+					$("#pause").text("PAUSE");
+				}
+				else {
+					$("#pause").text("PLAY");
+				}
+			}
+
+			// Scrolls the window to the video currently playing
+			function scrollToPlaying(){
+				$('html, body').animate({
+			        scrollTop: $("#frame"+playlist[playlistIndex]).offset().top
+			    }, 1000);
+			}
+
+			// Clears the playlist of all videos
+			function clearPlaylist(){
+				for (var i = playlist.length-1; i >= 0; i--){
+					removeFrame(playlist[i]);
+				}
+			}
+
+			// // [TODO] Fixes all the frames so that they are orderly again
+			// function fixFrames(){
+			// 	var playlistElem = $("#playlist");
+			// 	var notPlaylist = $("#lock");
+			// 	for (var i = 0; i < playlist.length; i++){
+			// 		$("#frame"+playlist[i]).appendTo(notPlaylist);
+			// 	}
+			// 	for (var i = 0; i < playlist.length; i++){
+			// 		$('#frame').animate( {
+			// 			top: 0+'px',
+			// 			left: 0+'px' },
+			// 			1500,
+			// 			function() {
+			// 				$("#frame"+playlist[i]).appendTo(playlist);
+			// 	    });
+			// 	}
+			// }
+		</script>
+		<style>
+			#dropzone {
+			    width: 300px;
+			    padding: 25px;
+			    border: 3px dashed #CCCCCC;
+			    margin: 0px;
+			    text-align: center;
+			    color: #808080;
+			    font-size: 30px;
+			    font-family: "Arial";
+			    -webkit-touch-callout: none;
+			    -webkit-user-select: none;
+			    -khtml-user-select: none;
+			    -moz-user-select: none;
+			    -ms-user-select: none;
+			    user-select: none;
+			}
+
+			#playlist{
+				width: 300px;
+			    padding: 25px;
+			    border: 3px #CCCCCC;
+			    border-style: none dotted none none;
+			}
+
+			#info{
+			    width: 300px;
+			    padding: 25px;
+			    color: #808080;
+			    font-size: 15px;
+			    font-family: "Arial";
+			    position: absolute;
+			    left: 400px;
+			    top: 0px;
+			}
+
+			.menu{
+			    padding: 5px;
+			    margin: 0px;
+			    text-align: center;
+			    color: #808080;
+			    font-size: 20px;
+			    font-family: "Arial";
+			    -webkit-touch-callout: none;
+			    -webkit-user-select: none;
+			    -khtml-user-select: none;
+			    -moz-user-select: none;
+			    -ms-user-select: none;
+			    user-select: none;
+			}
+
+			.frame{
+				width: 300px;
+				height: 200px;
+				background-color: rgba(255, 255, 255, 0.5);
+				border: 3px #CCCCCC;
+			    border-style: none dashed none dashed;
+				text-align: center;
+				z-index: 0;
+			}
+
+			.frameHighlighted{
+				width: 300px;
+				height: 200px;
+				background-color: rgba(230, 230, 230, 0.5);
+				border: 3px #CCCCCC;
+			    border-style: none dashed none dashed;
+				text-align: center;
+				z-index: 0;
+			}
+
+			.player{
+				z-index: 1;
+			}
+
+			.dragme{
+				position: absolute;
+				text-align: center;
+			    color: #808080;
+			    font-size: 30px;
+			    font-family: "Arial";
+			    top: 50px;
+			    right: -50px;
+			    -ms-transform: rotate(-90deg); /* IE 9 */
+    			-webkit-transform: rotate(-90deg); /* Chrome, Safari, Opera */
+			}
+
+			.panel{
+				position: absolute;
+			    top: -100px;
+			    left: -100px;
+			    width: 0px;
+			    height: 0px;
+			    z-index: -1;
+			}
+
+			.index{
+				position: absolute;
+				text-align: center;
+			    color: #808080;
+			    font-size: 30px;
+			    font-family: "Arial";
+			    top: 50px;
+			    left: 10px;
+			}
+		</style>
+	</head>
+	<body onload="init()">
+		<div>
+			<span class="menu" id="clear">
+				CLEAR
+			</span>
+			<span class="menu" id="jump">
+				JUMP
+			</span>
+			<!-- <span class="menu" id="lock">
+				LOCK
+			</span> -->
+			<span class="menu" id="prev">
+				PREV
+			</span>
+			<span class="menu" id="next">
+				NEXT
+			</span>
+			<span class="menu" id="pause">
+				
+			</span>
+			</div>
+			<div id="dropzone" ondrop="dropped(event)" ondragover="allowDrop(event)">
+				DROP HERE
+			</div>
+			<br>
+			<div id='playlist'>
+			</div>
+		</div>
+		<div id="info">Welcome to Snackbar! Don't know what this is? Start by dropping Youtube URL's into the drop zone.<br>
+			<form>
+				<input type="text" name="youtubeExample" value="https://www.youtube.com/watch?v=dgKGixi8bp8" size="35">
+				<br>
+				<input type="text" name="redditExample" value="http://www.reddit.com/r/youtubehaiku/top?sort=top&t=month" size="35">
+				<br>
+				<input type="text" name="redditExample" value="gangnam style" size="35">
+			</form>
+			<br>Videos will be put into the playlist automatically.<br><br>If a Reddit URL is dragged into the drop zone, videos will be loaded from that page.<br><br>If keywords are given or if the URL is not recognized, the video with the best match will be added to the playlist.<br><br>Multiple URL's can be put in at the same time if they're on different lines.<br><br>Videos in the playlist can be dragged around, reordered, and removed from the playlist.
+		
+		</div>
+	</body>
+
+</html>
